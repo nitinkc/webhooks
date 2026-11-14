@@ -1,96 +1,113 @@
-# webhooks-101
+# grpc-101
 
-A hands-on guide to **webhooks**, built around a working playground you
-can run locally: a tiny FastAPI app that is **both** a webhook provider
-and a webhook receiver, so you can watch the entire lifecycle in one
-process.
+A hands-on guide to **gRPC**, built around a working playground you can
+run locally. `eventbus/` is an `EventBus` contract whose two RPCs cover
+the two shapes you'll use most:
 
-## What is a webhook?
+- `SendEvent` — **unary**: one request, one response.
+- `Subscribe` — **server-streaming**: the open call is the subscription;
+  events stream back to the client as they happen.
 
-A webhook is a **reversed API call**. With a normal API, *you* call the
-service to ask "did anything happen?". With a webhook, you give the service
-a URL once, and *it* calls *you* the moment something happens:
+## What is gRPC?
+
+gRPC is RPC over HTTP/2 with **Protocol Buffers** as the contract. A
+`.proto` file declares the service once; `protoc` generates typed client
+and server code in every major language. On the wire, payloads are
+compact binary protobuf and HTTP/2 multiplexes many calls over one
+connection.
 
 ```mermaid
 sequenceDiagram
-    participant App as Your app (subscriber)
-    participant GH as Provider (e.g. GitHub)
+    participant C as Client (subscriber)
+    participant S as EventBus server
 
-    App->>GH: 1. "POST events to https://me.example/webhooks/receive"
-    Note right of GH: ... time passes ...
-    GH->>App: 2. POST /webhooks/receive (signed JSON)
-    App->>GH: 3. 200 OK
+    C->>S: Subscribe() — opens the stream
+    Note over C,S: call stays open
+    C->>S: SendEvent(type, data) — unary RPC
+    S->>C: SendEventResponse(event, delivered_to=1)
+    S->>C: Event — pushed down the still-open Subscribe stream
 ```
 
-No polling, no waiting — the provider pushes the event to you.
+## The playground at a glance
 
-## The two roles
+One contract, three separate pieces built on it:
 
-| Role | Also called | What it does | In this repo |
-|---|---|---|---|
-| **Provider** | publisher, sender, *notification server* | Owns the events. Lets others subscribe, then POSTs signed events to them | `POST /emit`, `app/dispatcher.py` |
-| **Subscriber** | consumer, receiver, listener | Owns the callback URL. Registers it with the provider, receives and processes events | `POST /webhooks/receive` |
+```mermaid
+flowchart LR
+    subgraph contract["eventbus/ — the contract"]
+        P["events.proto"]
+        GEN["events_pb2*.py<br/>(generated)"]
+        P -->|protoc| GEN
+    end
 
-!!! info "Who acts as the subscriber?"
-    **You do** — whoever wants to be notified. When you paste a URL into
-    GitHub's *Settings → Webhooks* page, your application is the subscriber
-    and GitHub is the provider. Confusingly, some docs call the *provider*
-    the "webhook" itself — read [The players](concepts/roles.md) for the
-    full vocabulary.
+    subgraph processes["three processes"]
+        S["server/<br/>gRPC server :50051"]
+        CL["client/<br/>CLI demo"]
+        W["ui/<br/>FastAPI bridge :8090"]
+    end
+
+    BR["Browser<br/>(HTTP + WebSocket only)"]
+
+    GEN -.->|imported by| S
+    GEN -.->|imported by| CL
+    GEN -.->|imported by| W
+
+    CL <-->|"gRPC / HTTP2"| S
+    W <-->|"gRPC / HTTP2"| S
+    BR <-->|"HTTP + WebSocket"| W
+```
+
+The proto file is the single source of truth — `protoc` generates the
+stubs, and the server, CLI client, and UI bridge all import them.
 
 ## Run it
 
 ```bash
 uv sync
-cp .env.example .env
 
-# terminal 1 — the server (provider AND receiver in one)
-uv run uvicorn app.main:app --reload
+# terminal 1 — the gRPC server
+uv run python -m server.server        # :50051
 
-# terminal 2 — the whole lifecycle in one command
-uv run python scripts/demo.py
+# terminal 2 — the client demo
+uv run python -m client.demo
 ```
 
-Open <http://localhost:8000> for the **live dashboard** — an interactive
-view of the whole lifecycle: subscribe URLs, emit events, and watch signed
-deliveries retry and land. See [The dashboard](dashboard.md) for a tour of
-each panel. Start with the **valid**, **tampered**, and **replay** experiments:
-predict the status, run the request, then inspect the response and raw bodies.
-Next add healthy/flaky/dead subscribers and compare their retry timelines.
-The [browser learning path](exercises.md#browser-learning-path) follows this exact
-sequence. Tests: `uv run pytest`.
-
-This is an unauthenticated local learning tool. Use synthetic data; do not deploy
-it as a public webhook service. All state resets when the process restarts.
+Tests: `uv run pytest`.
 
 Serve this documentation locally:
 
 ```bash
-uv run mkdocs serve -a 127.0.0.1:8001   # separate port from the playground
+uv run mkdocs serve   # http://127.0.0.1:8000 (or the port it prints)
 ```
+
+## Check yourself
+
+<quiz>
+Where does the `EventBus` service contract live?
+- [ ] Inside `server/server.py` as Python type hints
+- [x] In `eventbus/events.proto` — `protoc` generates the Python stubs from it
+- [ ] In the FastAPI bridge's OpenAPI schema
+</quiz>
+
+<quiz>
+Which processes in the playground speak gRPC?
+- [ ] Only `server/` — clients speak HTTP
+- [ ] The browser, the bridge, and the server
+- [x] `server/`, `client/`, and `ui/` — the browser never touches gRPC, the bridge calls the real stubs
+</quiz>
 
 ## Where to go next
 
-1. [The dashboard](dashboard.md) — the fastest way to *see* it: panels for
-   subscriptions, emitting, deliveries/retries, and received events.
-2. [The players](concepts/roles.md) — who is the subscriber, who is the
-   notification server, and what each owes the other.
-3. [Anatomy of a delivery](concepts/anatomy.md) — the exact headers and
-   body every webhook carries (the same ones the dashboard shows per delivery).
-4. [Receiving](receiving.md) / [Sending](sending.md) — the two halves of
-   the implementation.
-5. [Security](security.md) — how signatures prove a request is genuine.
-6. [Exposing your server](exposing.md) — tunnels, and how to receive *real*
-   GitHub webhooks on your laptop.
-7. [Alternatives to webhooks](concepts/delivery-options.md) — when
-   websockets or gRPC streams are the better tool.
-8. [Exercises](exercises.md) — hands-on tasks that cement it all.
+1. [gRPC: contracts and streams](grpc.md) — the `.proto` contract, the
+   four RPC shapes, and how the server fans out to subscribers.
+2. [Exercises](exercises.md) — extend the contract, poke it with
+   `grpcurl`, add streaming in the other direction.
 
 ## The sibling playgrounds
 
-This repo is one of three — the same toy flow over different transports:
+This repo is one of three:
 
-- **`../websockets-101`** — events pushed down open sockets: no public
-  URL, no signatures, no retries.
-- **`../grpc-101`** — events over a server-streaming RPC: the open call
-  *is* the subscription.
+- **`../webhooks`** — the same flow over signed HTTP `POST`s with
+  retries: what you use when the two sides are strangers on the internet.
+- **`../websockets-101`** — the same flow over one bidirectional socket:
+  what you use for live clients you control.

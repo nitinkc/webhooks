@@ -1,8 +1,9 @@
-site_name: webhooks-101
-site_description: A hands-on guide to webhooks — signing, delivery, retries — with a working playground that is both provider and receiver.
-repo_url: https://github.com/nitinkc/webhooks
-repo_name: nitinkc/webhooks
-site_url: https://nitinkc.github.io/webhooks/
+site_name: grpc-101
+site_description: A hands-on guide to gRPC — unary and server-streaming RPCs with a working playground.
+
+repo_url: https://github.com/nitinkc/gRPC
+repo_name: nitinkc/gRPC
+site_url: https://nitinkc.github.io/gRPC/
 
 theme:
   name: material
@@ -59,11 +60,7 @@ markdown_extensions:
       line_spans: __span
       pygments_lang_class: true
   - pymdownx.inlinehilite
-  - pymdownx.superfences:
-      custom_fences:
-        - name: mermaid
-          class: mermaid
-          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.superfences
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.tasklist:
@@ -83,14 +80,6 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Dashboard: dashboard.md
-  - Concepts:
-      - "The players: who is the subscriber": concepts/roles.md
-      - "Anatomy of a delivery": concepts/anatomy.md
-      - "Alternatives to webhooks": concepts/delivery-options.md
-      - Receiving webhooks: receiving.md
-      - Sending webhooks: sending.md
-      - Security: security.md
-      - Exposing your server: exposing.md
-  - Tools: tools.md
+  - "gRPC: contracts and streams": grpc.md
+  - "Web UI": ui.md
   - Exercises: exercises.md
