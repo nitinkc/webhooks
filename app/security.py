@@ -1,39 +1,32 @@
-"""X-Twilio-Signature verification.
+"""Webhook signatures — how a receiver knows a request is genuine.
 
-Twilio signs every webhook POST with your Auth Token. The signature is
-HMAC-SHA1 over (url + sorted POST params), base64-encoded, sent in the
-X-Twilio-Signature header. Verifying it proves the request really came
-from Twilio and wasn't forged or tampered with — critical for anything
-touching patient data.
+This implements GitHub's scheme exactly:
 
-The simulator (scripts/simulate.py) uses the same algorithm, so validation
-runs for real locally — flip TWILIO_AUTH_TOKEN to a real token later and
-nothing else changes.
+    X-Hub-Signature-256: sha256=<hex of HMAC-SHA256(secret, raw body)>
+
+The same idea is used by Shopify, Slack, Stripe, and the Standard Webhooks
+spec — learn these two functions and you can verify most webhooks on the
+internet. Unlike Twilio's scheme the URL is *not* signed, so it works
+unchanged through tunnels and proxies.
 """
 
-import logging
-
-from fastapi import HTTPException, Request
-from twilio.request_validator import RequestValidator
-
-from app.config import get_settings
-
-logger = logging.getLogger(__name__)
+import hashlib
+import hmac
 
 
-async def verify_twilio_signature(request: Request) -> None:
-    settings = get_settings()
-    if not settings.validate_signatures:
-        logger.warning("TWILIO_AUTH_TOKEN not set — skipping signature validation")
-        return
+def sign(secret: str, body: bytes) -> str:
+    """Compute the signature a provider sends for a request body."""
+    digest = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return f"sha256={digest}"
 
-    signature = request.headers.get("X-Twilio-Signature", "")
-    form = await request.form()  # cached; the route can call request.form() again
 
-    # The validator checks the signature against the exact URL Twilio called.
-    # Locally that's APP_BASE_URL + path; behind ngrok/a proxy it must be the
-    # public URL (watch out for https->http scheme rewriting).
-    url = settings.app_base_url.rstrip("/") + request.url.path
+def verify(secret: str, body: bytes, signature: str | None) -> bool:
+    """Check a received signature.
 
-    if not RequestValidator(settings.twilio_auth_token).validate(url, dict(form), signature):
-        raise HTTPException(status_code=403, detail="Invalid Twilio signature")
+    compare_digest does a constant-time comparison — a naive ``==`` leaks
+    how many leading characters were correct via response timing, which is
+    enough to forge a signature byte by byte.
+    """
+    if not signature:
+        return False
+    return hmac.compare_digest(sign(secret, body), signature)
