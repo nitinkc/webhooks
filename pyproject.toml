@@ -1,20 +1,19 @@
 [project]
-name = "grpc-101"
+name = "webhooks-101"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi>=0.162.7",
-    "grpcio>=1.85.1",
-    "protobuf>=7.36.2",
+    "fastapi>=0.162.4",
+    "httpx>=0.28.1",
+    "pydantic-settings>=2.16.2",
     "uvicorn[standard]>=0.54.0",
 ]
 
 [dependency-groups]
 dev = [
-    "grpcio-tools>=1.85.1",
     "mkdocs-material>=9.5.0",
-    "mkdocs-mermaid2-plugin>=1.2.3",
-    "mkdocs-quiz>=1.7.1",
+    "mkdocs-mermaid2-plugin>=1.2.3,<2",
+    "mkdocs-quiz>=1.7.1,<2",
     "pytest>=9.2.0",
 ]
 

@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>webhooks-101 — watch a webhook happen</title>
+<style>
+  :root {
+    --bg: #0f1420; --panel: #161d2e; --panel2: #1c2438; --border: #2a3552;
+    --text: #e6ebf5; --dim: #8b96b0; --accent: #6ea8fe;
+    --ok: #3fb96b; --fail: #ef5f6b; --warn: #e8b34b; --purple: #b083f0;
+  }
+  * { box-sizing: border-box }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.55 system-ui, -apple-system, sans-serif;
+  }
+  code, pre, textarea, input { font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace }
+  a { color: var(--accent) }
+  h1 { font-size: 20px; margin: 0 }
+  h2 { font-size: 13px; margin: 0 0 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em }
+  h2 .step { color: var(--accent); font-size: 15px; margin-right: 6px }
+  header {
+    padding: 18px 28px 14px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+  }
+  header .sub { color: var(--dim) }
+  header .links { margin-left: auto; font-size: 13px }
+  header .links a { margin-left: 14px; text-decoration: none }
+
+  /* ---------- lifecycle diagram ---------- */
+  .flow {
+    display: grid; grid-template-columns: 1fr auto 1fr; gap: 0;
+    padding: 22px 28px 8px; align-items: stretch;
+  }
+  .zone {
+    border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px;
+    background: var(--panel);
+  }
+  .zone h3 { margin: 0 0 2px; font-size: 14px }
+  .zone p { margin: 0; color: var(--dim); font-size: 12.5px }
+  .wire {
+    display: flex; flex-direction: column; justify-content: center;
+    align-items: center; padding: 0 22px; min-width: 220px; position: relative;
+  }
+  .wire .line { width: 100%; height: 2px; background: var(--border); position: relative }
+  .wire .line::after {
+    content: "▶"; position: absolute; right: -2px; top: -9px; color: var(--border); font-size: 12px;
+  }
+  .wire .label { color: var(--dim); font-size: 12px; margin-top: 6px }
+  .packet {
+    position: absolute; top: -7px; left: 0; width: 14px; height: 14px;
+    border-radius: 50%; background: var(--accent); opacity: 0;
+    box-shadow: 0 0 12px var(--accent);
+  }
+  .packet.fly { animation: fly 1s ease-in-out }
+  @keyframes fly { 0% { left: 0; opacity: 1 } 90% { opacity: 1 } 100% { left: calc(100% - 14px); opacity: 0 } }
+
+  /* ---------- panels ---------- */
+  main {
+    display: grid; gap: 18px; padding: 18px 28px 40px;
+    grid-template-columns: minmax(320px, 1fr) minmax(320px, 1.4fr) minmax(320px, 1fr);
+  }
+  @media (max-width: 1150px) { main { grid-template-columns: 1fr 1fr } }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr } }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px;
+  }
+  .hint { color: var(--dim); font-size: 12.5px; margin: 0 0 10px }
+  .hint code { color: var(--text) }
+
+  /* subscriptions */
+  .sub-row {
+    display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px;
+  }
+  .sub-row code { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+  .sub-row .id { color: var(--purple); flex: 0 }
+  .sub-row .role { font-size: 11px; padding: 1px 7px; border-radius: 10px; flex: 0 }
+  .role.ok { background: #12351f; color: var(--ok) }
+  .role.flaky { background: #3d3113; color: var(--warn) }
+  .role.dead { background: #3d1619; color: var(--fail) }
+  .role.ext { background: #132c3d; color: var(--accent) }
+  .del { background: none; border: none; color: var(--dim); cursor: pointer; font-size: 15px }
+  .del:hover { color: var(--fail) }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 }
+  .presets button, .emit-btn {
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 7px; padding: 5px 10px; cursor: pointer; font-size: 12px;
+  }
+  .presets button:hover, .emit-btn:hover { border-color: var(--accent) }
+  .addrow { display: flex; gap: 6px; margin-top: 8px }
+  .addrow input {
+    flex: 1; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 7px; padding: 6px 9px;
+  }
+
+  /* emit */
+  .emit-panel textarea {
+    width: 100%; min-height: 84px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px; resize: vertical;
+  }
+  .emit-panel input {
+    width: 100%; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 7px; padding: 6px 9px; margin-bottom: 8px;
+  }
+  .emit-btn { width: 100%; padding: 8px; font-size: 13px; font-weight: 600; margin-top: 8px;
+    background: #1b3a6b; border-color: #2f5aa8 }
+  .emit-btn:hover { background: #214684 }
+
+  /* deliveries */
+  .deliveries-panel { grid-column: span 1 }
+  .delivery {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+    margin-bottom: 8px; overflow: hidden;
+  }
+  .delivery .head {
+    display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer; user-select: none;
+  }
+  .delivery .head:hover { background: #212c45 }
+  .delivery .evt { font-weight: 600 }
+  .delivery .to { color: var(--dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 700 }
+  .badge.success { background: #12351f; color: var(--ok) }
+  .badge.failed { background: #3d1619; color: var(--fail) }
+  .badge.delivering { background: #3d3113; color: var(--warn) }
+  .attempts { display: flex; align-items: center; gap: 4px; padding: 0 10px 8px; flex-wrap: wrap }
+  .attempt {
+    font-size: 11.5px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border);
+  }
+  .attempt.s2 { color: var(--ok); border-color: var(--ok) }
+  .attempt.s5 { color: var(--fail); border-color: var(--fail) }
+  .attempt.err { color: var(--fail); border-color: var(--fail); border-style: dashed }
+  .wait { color: var(--dim); font-size: 10.5px }
+  .detail { border-top: 1px solid var(--border); padding: 10px; display: none }
+  .delivery.open .detail { display: block }
+  .detail h4 { margin: 8px 0 4px; font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em }
+  .detail h4:first-child { margin-top: 0 }
+  .hdr { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 12px }
+  .hdr .k { color: var(--accent) }
+  .hdr .v { word-break: break-all }
+  .hdr .v.sig { color: var(--warn) }
+  .detail pre {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px; overflow-x: auto; margin: 0;
+  }
+
+  /* events */
+  .event-row {
+    padding: 7px 10px; background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 8px; margin-bottom: 6px; cursor: pointer; user-select: none;
+  }
+  .event-row .top { display: flex; gap: 8px; align-items: center }
+  .event-row .evt { font-weight: 600; flex: 1 }
+  .event-row time { color: var(--dim); font-size: 11.5px }
+  .event-row .checks { display: flex; gap: 10px; margin-top: 4px; font-size: 11.5px; color: var(--dim) }
+  .event-row .checks .pass { color: var(--ok) }
+  .event-row .checks .dup { color: var(--warn) }
+  .event-row pre { display: none; margin: 8px 0 2px; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px; overflow-x: auto }
+  .event-row.open pre { display: block }
+  .empty { color: var(--dim); font-style: italic; font-size: 13px }
+  .flash { animation: flash 1.2s }
+  @keyframes flash { 0% { box-shadow: 0 0 0 2px var(--accent) } 100% { box-shadow: none } }
+  .learning { margin: 22px 28px 0; border-color: var(--accent) }
+  .lessons { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px }
+  .lesson { background: var(--panel2); border-radius: 8px; padding: 14px }
+  .lesson h3 { margin: 0 0 6px; font-size: 15px }
+  .lesson p { color: var(--dim); min-height: 58px }
+  button { cursor: pointer }
+  button:disabled { opacity: .55; cursor: wait }
+  button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px }
+  #labOutput { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); padding: 12px; border-radius: 8px }
+  #connection { padding: 8px 28px; color: var(--dim) }
+  @media (max-width: 760px) { .lessons { grid-template-columns: 1fr } .flow { grid-template-columns: 1fr; gap: 12px } .wire { min-height: 60px } main { padding: 16px } .learning { margin: 16px } }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important } }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>webhooks-101</h1>
+  <span class="sub">one app playing <b>both</b> roles — watch the whole lifecycle live</span>
+  <span class="links"><a href="/docs">API docs</a><a href="/state">/state</a></span>
+</header>
+
+<div id="connection" role="status">Connecting to the playground…</div>
+<section class="panel learning" aria-labelledby="learningTitle">
+  <h2 id="learningTitle">Start here — predict, run, inspect</h2>
+  <p class="hint">No setup needed for these three experiments. Each calls the real local receiver in-process; your secret stays on the server. Results appear below and accepted requests appear in Received events.</p>
+  <div class="lessons">
+    <article class="lesson"><h3>1. Trust the sender</h3><p>Predict: what happens when the signature matches the exact body bytes?</p><button class="emit-btn" data-lab="valid">Send a valid webhook</button></article>
+    <article class="lesson"><h3>2. Change one value</h3><p>Predict: can a body changed after signing still pass verification?</p><button class="emit-btn" data-lab="tampered">Send a tampered webhook</button></article>
+    <article class="lesson"><h3>3. Deliver it twice</h3><p>Predict: what happens when two requests share the same delivery ID?</p><button class="emit-btn" data-lab="duplicate">Replay a delivery</button></article>
+  </div>
+  <p id="labFeedback" role="status">Choose an experiment to see the HTTP response and what it teaches.</p>
+  <details><summary>Inspect experiment bodies and responses</summary><pre id="labOutput">No experiment run yet.</pre></details>
+  <p class="hint">Next: add healthy, flaky, and dead subscribers below, then emit an event. Compare one event ID with a separate delivery ID for each subscriber. Flaky/dead endpoints simulate failures only; they do not verify or record received events.</p>
+</section>
+
+<div class="flow">
+  <div class="zone">
+    <h3>🏷 Provider <span style="color:var(--dim);font-weight:400">(this app, left)</span></h3>
+    <p>Owns the events. Subscribers give it a URL; when something happens it
+    signs the payload and <b>POSTs</b> to every URL — retrying on failure.
+    <code>POST /emit</code> → <code>app/dispatcher.py</code></p>
+  </div>
+  <div class="wire">
+    <div class="line"><div class="packet" id="packet"></div></div>
+    <div class="label">signed HTTP POST<br>(<code>X-Hub-Signature-256</code>)</div>
+  </div>
+  <div class="zone" style="text-align:right">
+    <h3><span style="color:var(--dim);font-weight:400">(this app, right)</span> Subscriber 🎯</h3>
+    <p>Owns the callback URL. On each request it must
+    <b>verify the signature → dedupe → answer 200 fast</b>.
+    <code>POST /webhooks/receive</code> → <code>app/main.py</code></p>
+  </div>
+</div>
+
+<main>
+  <section class="panel">
+    <h2><span class="step">①</span>Subscribers — who's listening</h2>
+    <p class="hint">In the real world you paste your URL into GitHub → Settings → Webhooks.
+    Here you do it with <code>POST /subscriptions</code>. Try the demo endpoints:</p>
+    <div class="presets">
+      <button data-url="/webhooks/receive" title="verifies + records every delivery">+ healthy receiver</button>
+      <button data-url="/webhooks/flaky" title="500s the first 2 attempts — watch retries">+ flaky receiver</button>
+      <button data-url="/webhooks/dead" title="always 500s — watch a delivery die">+ dead receiver</button>
+    </div>
+    <div id="subs"></div>
+    <div class="addrow">
+      <input id="subUrl" aria-label="Subscriber callback URL" placeholder="https://… (try webhook.site)">
+      <button class="emit-btn" style="width:auto;margin:0" onclick="addSub()">Subscribe</button>
+    </div>
+  </section>
+
+  <section class="panel emit-panel">
+    <h2><span class="step">②</span>Emit — "something happened"</h2>
+    <p class="hint">This is the moment GitHub would call an event <code>push</code> or Stripe
+    <code>invoice.paid</code>. It fans out to every subscriber.</p>
+    <input id="evtType" value="order.created" title="event type">
+    <textarea id="evtData" aria-label="Event data as a JSON object">{"order_id": 42, "total": "9.99"}</textarea>
+    <button class="emit-btn" onclick="emitEvt()">⚡ Emit event</button>
+    <div id="emitResult" class="hint" style="margin-top:8px"></div>
+  </section>
+
+  <section class="panel">
+    <h2><span class="step">③</span>Deliveries — provider side</h2>
+    <p class="hint" id="cfgHint">Each delivery gets a unique ID and is retried with
+    exponential backoff on non-2xx. Click one to see the exact signed request.</p>
+    <div id="deliveries"></div>
+  </section>
+
+  <section class="panel" style="grid-column: 1 / -1">
+    <h2><span class="step">④</span>Received events — subscriber side</h2>
+    <p class="hint">What <code>/webhooks/receive</code> accepted. Every row already passed
+    signature verification (bad signatures get a <code>401</code> and never appear here).
+    Duplicates are flagged — webhooks are <em>at-least-once</em>.</p>
+    <div id="events"></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const seenDeliveries = new Set(), seenEvents = new Set();
+let first = true;
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function fmtTime(iso) { return iso ? iso.slice(11, 19) + 'Z' : '' }
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  return r.status === 204 ? null : r.json();
+}
+
+function roleOf(url) {
+  if (url.endsWith('/webhooks/flaky')) return ['flaky', 'fails twice'];
+  if (url.endsWith('/webhooks/dead')) return ['dead', 'always fails'];
+  if (url.endsWith('/webhooks/receive')) return ['ok', 'healthy'];
+  return ['ext', 'external'];
+}
+
+async function addSub(url) {
+  url = url || $('subUrl').value.trim();
+  if (!url) return;
+  if (url.startsWith('/')) url = location.origin + url;
+  try {
+    await api('/subscriptions', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({url})});
+    $('subUrl').value = '';
+    await refresh();
+  } catch (error) { $('connection').textContent = error.message; }
+}
+async function delSub(id) {
+  try { await api('/subscriptions/' + id, {method: 'DELETE'}); await refresh(); }
+  catch (error) { $('connection').textContent = error.message; }
+}
+
+async function emitEvt() {
+  let data;
+  try { data = JSON.parse($('evtData').value || '{}'); }
+  catch (e) { $('emitResult').textContent = '⚠ payload is not valid JSON'; return; }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    $('emitResult').textContent = 'Payload must be a JSON object.'; return;
+  }
+  const button = document.querySelector('.emit-panel button');
+  button.disabled = true;
+  $('emitResult').textContent = 'Delivering… watch the attempts update while retries run.';
+  try {
+  const r = await api('/emit', {method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({type: $('evtType').value || 'demo.ping', data})});
+  $('emitResult').innerHTML = r.subscribers === 0
+    ? 'No subscribers — add one in ① first.'
+    : `Fanned out to ${r.subscribers} subscriber(s).`;
+  const p = $('packet'); p.classList.remove('fly'); void p.offsetWidth; p.classList.add('fly');
+  await refresh();
+  } catch (error) { $('emitResult').textContent = error.message; }
+  finally { button.disabled = false; }
+}
+
+function renderSubs(subs) {
+  $('subs').innerHTML = subs.length ? subs.map(s => {
+    const [cls, lbl] = roleOf(s.url);
+    return `<div class="sub-row"><code class="id">${s.id}</code>
+      <code>${esc(s.url)}</code>
+      <span class="role ${cls}">${lbl}</span>
+      <button class="del" onclick="delSub('${s.id}')" title="unsubscribe">×</button></div>`;
+  }).join('') : '<p class="empty">none yet — add one above or run scripts/demo.py</p>';
+}
+
+function renderDeliveries(ds, cfg) {
+  const el = $('deliveries');
+  if (!ds.length) { el.innerHTML = '<p class="empty">emit an event to see deliveries</p>'; return; }
+  el.innerHTML = ds.slice(-25).reverse().map(d => {
+    const isNew = !first && !seenDeliveries.has(d.id + d.attempts.length);
+    seenDeliveries.add(d.id + d.attempts.length);
+    const attempts = d.attempts.map((a, i) => {
+      const cls = a.status == null ? 'err' : a.status < 300 ? 's2' : 's5';
+      const chip = `<span class="attempt ${cls}">#${a.n}: ${a.status ?? '✕ ' + esc(a.error)}</span>`;
+      // show the backoff delay between this attempt and the next
+      const wait = i < d.attempts.length - 1 || (d.status === 'delivering' && a.status >= 300)
+        ? `<span class="wait">→ wait ${(cfg.retry_delay_seconds * 2 ** i).toFixed(1)}s →</span>` : '';
+      return i < d.attempts.length - 1 ? chip + wait : chip;
+    }).join('');
+    const last = d.attempts[d.attempts.length - 1];
+    const hdrs = last ? Object.entries(last.headers).map(([k, v]) =>
+      `<span class="k">${esc(k)}</span><span class="v ${k.includes('Signature') ? 'sig' : ''}">${esc(v)}</span>`
+    ).join('') : '';
+    return `<div data-id="${esc(d.id)}" class="delivery ${isNew ? 'flash' : ''}" onclick="this.classList.toggle('open')">
+      <div class="head" role="button" tabindex="0" aria-label="Inspect delivery" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.parentElement.classList.toggle('open')}">
+        <span class="evt">${esc(d.event)}</span>
+        <span class="to">→ ${esc(d.url)}</span>
+        <span class="badge ${d.status}">${d.status}</span>
+      </div>
+      <div class="attempts">${attempts}</div>
+      <div class="detail">
+        <h4>request headers sent (last attempt)</h4>
+        <div class="hdr">${hdrs}</div>
+        <h4>request body — signature covers these exact bytes</h4>
+        <pre>${esc(d.body || '')}</pre>
+        <h4>delivery id (idempotency key)</h4>
+        <pre>${d.id}</pre>
+      </div></div>`;
+  }).join('');
+}
+
+function renderEvents(es) {
+  const el = $('events');
+  if (!es.length) { el.innerHTML = '<p class="empty">nothing received yet</p>'; return; }
+  el.innerHTML = es.slice(-25).reverse().map(e => {
+    const isNew = !first && !seenEvents.has(e.delivery_id + e.received_at);
+    seenEvents.add(e.delivery_id + e.received_at);
+    return `<div class="event-row ${isNew ? 'flash' : ''}" onclick="this.classList.toggle('open')">
+      <div class="top"><span class="evt">${esc(e.event)}</span>
+        <code>${esc((e.delivery_id || '').slice(0, 8))}</code>
+        <time>${fmtTime(e.received_at)}</time></div>
+      <div class="checks">
+        <span class="pass">✓ signature verified</span>
+        <span class="${e.duplicate ? 'dup' : 'pass'}">${e.duplicate ? '⚠ duplicate receipt — flagged' : '✓ new delivery id'}</span>
+        <span class="pass">✓ 200 OK returned</span>
+      </div>
+      <pre>${esc(JSON.stringify(e.payload, null, 2))}</pre>
+    </div>`;
+  }).join('');
+}
+
+async function refresh() {
+  try {
+    const s = await api('/state');
+    $('cfgHint').innerHTML = `Each delivery gets a unique ID and retries up to
+      <b>${s.config.max_attempts}</b> times with backoff
+      (${s.config.retry_delay_seconds}s ×2 each retry). Click one to see the exact signed request.`;
+    renderSubs(s.subscriptions);
+    const openDeliveries = new Set([...$('deliveries').querySelectorAll('.delivery.open')].map(el => el.dataset.id));
+    renderDeliveries(s.deliveries, s.config);
+    $('deliveries').querySelectorAll('.delivery').forEach(el => el.classList.toggle('open', openDeliveries.has(el.dataset.id)));
+    renderEvents(s.events);
+    first = false;
+    $('connection').textContent = 'Connected — live state updates every 1.5 seconds. State is in memory and resets on restart.';
+  } catch (e) { /* server restarting — try again next tick */
+    $('connection').textContent = 'Disconnected — retrying. Check that the FastAPI server is running.';
+  }
+}
+
+const lessons = {
+  valid: '200 OK: the HMAC matches the raw body. The receiver accepted and recorded the request.',
+  tampered: '401 Unauthorized: amount changed from 10 to 99 after signing. Verification failed before recording anything.',
+  duplicate: '200 OK twice: the second response flags duplicate=true. Both receipts are logged; real business processing must skip duplicates using persistent storage.'
+};
+document.querySelectorAll('[data-lab]').forEach(button => {
+  button.onclick = async () => {
+    document.querySelectorAll('[data-lab]').forEach(b => b.disabled = true);
+    $('labFeedback').textContent = 'Running experiment…';
+    try {
+      const result = await api('/lab/' + button.dataset.lab, {method: 'POST'});
+      $('labFeedback').textContent = lessons[result.scenario];
+      $('labOutput').textContent = JSON.stringify(result, null, 2);
+      await refresh();
+    } catch (error) { $('labFeedback').textContent = error.message; }
+    finally { document.querySelectorAll('[data-lab]').forEach(b => b.disabled = false); }
+  };
+});
+document.querySelectorAll('.presets button').forEach(b =>
+  b.onclick = () => addSub(b.dataset.url).catch(error => $('connection').textContent = error.message));
+$('subUrl').addEventListener('keydown', e => e.key === 'Enter' && addSub());
+refresh(); setInterval(refresh, 1500);
+</script>
+</body>
+</html>

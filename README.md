@@ -1,88 +1,82 @@
-# grpc-101
+# webhooks-101
 
-A minimal playground for learning **gRPC streaming** — the same toy flow
-(*something happened → tell interested parties*) expressed as RPCs:
+A local FastAPI playground that acts as both a webhook provider and receiver.
+Use the browser UI to send signed events, inspect requests, and explore tampering,
+duplicate deliveries, and retries. No external accounts or API keys required.
 
-- `SendEvent` — a **unary** RPC: one event in, one response back.
-- `Subscribe` — a **server-streaming** RPC: the open call *is* the
-  subscription; events flow back down the stream as they happen.
+## Run locally
 
-No accounts, no credentials, everything runs locally on `:50051`.
-
-> This repo is one of three sibling playgrounds. The webhook version lives
-> in `../webhooks` (signed `POST`s with retries); the websocket version in
-> `../websockets-101` (frames on an open socket).
-
-## Quickstart
+**Prerequisites:** Python 3.11+ and [uv](https://docs.astral.sh/uv/getting-started/installation/).
+Run the following from the repository root:
 
 ```bash
 uv sync
-
-# terminal 1 — the gRPC server
-uv run python -m server.server        # listens on :50051
-
-# terminal 2 — the client: open a Subscribe stream, send events
-uv run python -m client.demo
 ```
 
-Prefer a UI? Run a third process — a FastAPI bridge that proxies the
-browser to gRPC (REST → `SendEvent`, WebSocket → `Subscribe`):
+On first setup, copy `.env.example` to `.env` (skip this if `.env` already exists):
 
 ```bash
-uv run python -m ui.web               # http://localhost:8090
+cp .env.example .env
 ```
 
-Tests: `uv run pytest`.
+Start the server:
 
-**Full documentation** (MkDocs Material): `uv run mkdocs serve`.
-
-## What gRPC is
-
-gRPC is RPC over HTTP/2 with **Protocol Buffers** as the contract. You
-write a `.proto` file declaring services and messages once; tooling
-generates typed client and server code in every major language. On the
-wire the payloads are compact binary protobuf, and HTTP/2 multiplexes
-many calls over one connection.
-
-The headline feature: RPCs aren't just request/response. Four shapes
-exist —
-
-| Shape | Signature | In this repo |
-|---|---|---|
-| **Unary** | `SendEvent(req) -> resp` | emit one event |
-| **Server-streaming** | `Subscribe(req) -> stream Event` | the subscription |
-| Client-streaming | `stream Req -> resp` | — |
-| Bidirectional | `stream Req <-> stream Resp` | — |
-
-## The subscription, reinvented
-
-A webhook subscriber hands the provider a URL and waits for `POST`s. A
-gRPC subscriber just calls `Subscribe` and holds the line — the streaming
-response *is* the subscription, and it appears in the type signature:
-
-```proto
-rpc Subscribe(SubscribeRequest) returns (stream Event);
+```bash
+uv run uvicorn app.main:app --reload
 ```
 
-No callback URL, no signatures, no retry log: if the client is connected
-it gets the event; if it isn't, the stream ends and the client
-reconnects.
+- **Playground:** <http://localhost:8000> — start with the valid, tampered, and
+  replay experiments; then add subscribers and emit an event to watch retries.
+- **API reference:** <http://localhost:8000/docs>
+- **Health check:** <http://localhost:8000/health>
 
-## Layout
+No separate frontend server or build is needed. Stop the server with `Ctrl+C`.
+State is in memory and resets on restart, including automatic reloads.
 
+### Optional command-line demo
+
+With the server still running, open another terminal in the repository root:
+
+```bash
+uv run python scripts/demo.py
 ```
-eventbus/
-  events.proto    EventBus contract — SendEvent (unary) + Subscribe (stream)
-  events_pb2*.py  generated stubs — regen: uv run python -m grpc_tools.protoc -I. \
-                    --python_out=. --grpc_python_out=. eventbus/events.proto
-server/
-  server.py       EventBusServicer — Queue-based fan-out, listens on :50051
-client/
-  demo.py         CLI client — opens a Subscribe stream, sends events
-ui/
-  web.py          FastAPI bridge — browser UI → gRPC client (UI on :8090)
-  static/         index.html — single-page UI, no build step
-tests/
-  test_grpc.py    spins up a real server on an ephemeral port per test
-docs/             MkDocs site — the gRPC guide + exercises
+
+This registers healthy, flaky, and dead receivers, emits two events, and prints
+the delivery attempts. See [Sending webhooks](docs/sending.md) for manual requests.
+
+### Configuration
+
+Edit `.env` and restart the server to apply changes:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `WEBHOOK_SECRET` | `dev-secret-change-me` | Shared signing and verification secret |
+| `MAX_ATTEMPTS` | `4` | Total delivery attempts, including the first |
+| `RETRY_DELAY_SECONDS` | `0.5` | Initial retry delay; doubles between retries |
+
+If port 8000 is busy, add `--port 8002` to the server command and open that port.
+For the CLI demo, use `WEBHOOKS_BASE_URL=http://localhost:8002 uv run python scripts/demo.py`.
+
+## Documentation
+
+```bash
+uv run mkdocs serve -a 127.0.0.1:8001
 ```
+
+Open <http://127.0.0.1:8001> alongside the playground, or browse the source guides:
+
+- [Dashboard tour](docs/dashboard.md) and [hands-on exercises](docs/exercises.md)
+- [Provider vs. subscriber](docs/concepts/roles.md) and [delivery anatomy](docs/concepts/anatomy.md)
+- [Receiving](docs/receiving.md), [sending](docs/sending.md), and [signature security](docs/security.md)
+- [Tunnels and real GitHub webhooks](docs/exposing.md)
+- [Tools](docs/tools.md) and [webhooks vs. WebSockets vs. gRPC](docs/concepts/delivery-options.md)
+
+## Verify
+
+```bash
+uv run pytest -q
+uv run mkdocs build --strict
+```
+
+**Local learning only:** this app has unauthenticated management endpoints and
+in-memory state. Use synthetic data; it is not a production webhook service.

@@ -1,62 +1,106 @@
 # Exercises
 
-Hands-on tasks, roughly in order of difficulty.
+Hands-on tasks, roughly in order of difficulty. Each one maps to a real
+concept from these docs.
 
-## 1. Extend the contract
+## Browser learning path
 
-Add a `ListEvents` unary RPC to `eventbus/events.proto` that returns
-`EventBusServicer.sent`, regenerate the stubs (the `protoc` command is in
-the `.proto` header), implement it in `server/server.py`, and call it
-from `client/demo.py`.
+Start the app with `uv run uvicorn app.main:app --reload` and open
+<http://localhost:8000>. Predict the outcome before each action:
 
-**Concepts:** the proto → generate → implement loop is the entire gRPC
-workflow. What did the compiler catch for you that a JSON-over-HTTP API
-wouldn't?
+1. **Send a valid webhook**: expect `200` and a new received event.
+2. **Send a tampered webhook**: expect `401` and no new received event.
+   Expand the experiment inspector: which exact bytes changed?
+3. **Replay a delivery**: expect two `200`s sharing one delivery ID, with
+   `duplicate: true` in the second response. Why acknowledge a duplicate?
+4. Add **healthy**, **flaky**, and **dead** subscribers; emit one event.
+   Expect separate delivery IDs but the same event ID. With default settings,
+   healthy takes one attempt, flaky takes three, dead exhausts four.
+5. Expand a delivery and inspect the raw body and signature header.
+   Why would pretty-printing the JSON before verification be incorrect?
 
-## 2. Poke the server with grpcurl
+The lab calls the real receiver in-process; retries use actual HTTP callbacks.
+Only healthy/lab requests appear in Received events; flaky/dead simulate status
+codes only. State resets on server restart. See [The dashboard](dashboard.md)
+for the UI/API mapping, then try the command-line and coding exercises below.
 
-[`grpcurl`](https://github.com/fullstorydev/grpcurl) is `curl` for gRPC.
-It works two ways: pointing at `.proto` files directly, or via server
-reflection.
+## 1. Forge and get rejected
 
 ```bash
-# without reflection — hand it the proto
-grpcurl -plaintext -import-path . -proto eventbus/events.proto \
-  -d '{"type": "demo.ping", "data_json": "{}"}' \
-  localhost:50051 eventbus.v1.EventBus/SendEvent
+uv run python scripts/send.py --bad-secret
 ```
 
-Try the same for `Subscribe` — what happens to the command? Why is a
-streaming RPC awkward for a CLI tool?
+**Question:** the receiver returns `401`, not `400`. Why is that the right
+status code? What would `403` imply instead?
 
-**Bonus:** add `grpc reflection` support to `server/server.py`
-(`pip install grpcio-reflection`, a few lines) so callers don't need the
-`.proto` at all.
+## 2. Watch retries happen
 
-## 3. Watch a stream die
+```bash
+uv run uvicorn app.main:app --reload     # terminal 1
+uv run python scripts/demo.py            # terminal 2
+```
 
-Run the server and `client/demo.py`, then kill the server while the
-`Subscribe` stream is open.
+In the output, `/webhooks/flaky` shows `[500, 500, 200]` and `/webhooks/dead`
+shows `[500, 500, 500, 500]`. Open `GET /deliveries` and check the `attempts`
+array — the same `X-Webhook-Delivery` ID, rising `X-Webhook-Attempt`
+numbers, growing gaps (0.5s → 1s → 2s).
 
-**Question:** what does the client see — an exception, or silence? Wrap
-the `stub.Subscribe(...)` loop in a retry: how long does it take to
-notice the server is gone, and what does reconnecting cost (missed
-events?).
+**Question:** why does the retry of a delivery reuse the delivery ID, and
+what does the receiver do with that?
 
-## 4. Stream in the other direction
+## 3. Inspect a delivery from the outside
 
-Add a client-streaming RPC `SendEvents(stream SendEventRequest) returns
-(SendEventsResponse)` — many events in, one summary out. Regenerate,
-implement, and call it with a generator that yields events slowly (one
-per second).
+Create a free URL at [webhook.site](https://webhook.site), then:
 
-**Concepts:** how is this different from calling `SendEvent` in a loop?
-(One HTTP/2 stream vs many — where does the overhead go?)
+```bash
+curl -X POST localhost:8000/subscriptions \
+  -H 'Content-Type: application/json' \
+  -d '{"url": "https://webhook.site/<your-id>"}'
+uv run python scripts/demo.py
+```
 
-## 5. Deadlines
+Compare what webhook.site shows (headers, raw body) with what the local
+receiver recorded in `GET /events`.
 
-gRPC calls carry explicit deadlines end to end. Call `SendEvent` with a
-`timeout=` of 0.001s while a `Subscribe` stream is sleeping.
+## 4. Add replay protection (Stripe-style)
 
-**Question:** what status code comes back? How does a deadline differ
-from the retry-with-backoff a webhook provider does?
+Modify `dispatcher.py` to add an `X-Webhook-Timestamp` header and sign
+`timestamp.body` instead of just `body`. Modify the receiver to reject
+timestamps older than 5 minutes — *before* checking dedup.
+
+**Concepts:** why does signing the timestamp prevent an attacker from
+stripping it? What breaks if subscriber and provider clocks drift?
+
+## 5. Write a receiver in another language
+
+The signature scheme is ~5 lines of stdlib HMAC anywhere — that's the point
+of the standard. Write a receiver in Java (Spring Boot, Javalin, or the
+JDK's built-in `HttpServer`), Node (`express`/`crypto`), or Go:
+
+```text
+1. read raw body bytes
+2. expected = "sha256=" + hex(HMAC_SHA256(secret, body))
+3. constant-time compare with X-Hub-Signature-256
+4. 200 on match, 401 otherwise
+```
+
+Then point `send.py` at it: `uv run python scripts/send.py --url http://localhost:<port>/...`.
+
+**Bonus:** run it on a second machine or VM and subscribe *its* LAN/public
+URL to the local provider — now the two sides really are separate servers.
+
+## 6. Go live with GitHub
+
+Follow [Exposing your server](exposing.md) to receive a genuine signed
+`push` event. Then find GitHub's "Recent Deliveries" tab and compare its
+view of the delivery with your `/deliveries` log — same concept, provider
+and subscriber side.
+
+## 7. Compare with the other transports
+
+Run the sibling playgrounds — `../websockets-101` and `../grpc-101` — and
+emit the same `order.created` event in each. Now kill each server
+mid-delivery.
+
+**Question:** which subscribers notice, and how? What machinery does each
+mechanism need to tolerate the other side being down?
